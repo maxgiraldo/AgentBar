@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/agentbar-logo.svg" alt="AgentBar logo" width="144">
+</p>
+
 # AgentBar
 
 macOS menu-bar watcher for Claude Code, Codex CLI, and Pi sessions. It shows which agents are working or waiting, plays a sound when an agent becomes idle, posts a notification, and can jump iTerm2 to the matching tab.
@@ -33,6 +37,10 @@ The installer:
 - `Ctrl+Option+Command+A` cycles through sessions, idle sessions first.
 - Clicking a session focuses its iTerm2 tab.
 - Notifications are sent by the signed app bundle, not `terminal-notifier`.
+
+## Screenshot
+
+![AgentBar menu screenshot](assets/menu-screenshot.png)
 
 ## Commands
 
