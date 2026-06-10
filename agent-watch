@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+JQ=${JQ:-$(command -v jq 2>/dev/null || true)}
+PS=/bin/ps
+KILL=/bin/kill
+PGREP=/usr/bin/pgrep
+LSOF=/usr/sbin/lsof
+FIND=/usr/bin/find
+STAT=/usr/bin/stat
+SORT=/usr/bin/sort
+LS=/bin/ls
+TAIL=/usr/bin/tail
+GREP=/usr/bin/grep
+SED=/usr/bin/sed
+TR=/usr/bin/tr
+HEAD=/usr/bin/head
+AWK=/usr/bin/awk
+OSASCRIPT=/usr/bin/osascript
+MKDIR=/bin/mkdir
+MV=/bin/mv
+DATE=/bin/date
+PRINTF=/usr/bin/printf
+BASENAME=/usr/bin/basename
+DIRNAME=/usr/bin/dirname
+
+if [ -z "$JQ" ]; then
+  echo "agent-watch: jq not found" >&2
+  exit 127
+fi
+
+normalize_tty() {
+  local tty=${1:-}
+  case "$tty" in
+    ""|"??") echo "" ;;
+    /dev/*) echo "$tty" ;;
+    *) echo "/dev/$tty" ;;
+  esac
+}
+
+trim() {
+  $AWK '{$1=$1; print}'
+}
+
+clean_field() {
+  $TR '\011\012\015' '   '
+}
+
+short_cwd() {
+  local cwd=${1:-}
+  cwd=${cwd%/}
+  if [ -z "$cwd" ]; then
+    echo "?"
+    return
+  fi
+  if [ "$cwd" = "/" ]; then
+    echo "/"
+    return
+  fi
+  local base parent
+  base=$($BASENAME "$cwd")
+  parent=$($BASENAME "$($DIRNAME "$cwd")")
+  if [ -z "$parent" ] || [ "$parent" = "/" ]; then
+    echo "$base"
+  else
+    echo "$parent/$base"
+  fi
+}
+
+emit_row() {
+  local id=$1 tool=$2 state=$3 tty=$4 cwd=$5 label=$6
+  id=$(printf '%s' "$id" | clean_field)
+  tool=$(printf '%s' "$tool" | clean_field)
+  state=$(printf '%s' "$state" | clean_field)
+  tty=$(printf '%s' "$tty" | clean_field)
+  cwd=$(printf '%s' "$cwd" | clean_field)
+  label=$(printf '%s' "$label" | clean_field)
+  $PRINTF '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$tool" "$state" "$tty" "$cwd" "$label"
+}
+
+collect_claude() {
+  local dir="$HOME/.claude/sessions"
+  [ -d "$dir" ] || return 0
+
+  local file pid sid cwd name status tty state label_name label
+  for file in "$dir"/*.json; do
+    [ -e "$file" ] || continue
+    eval "$($JQ -r '
+      "pid=" + ((.pid // "") | tostring | @sh) + "\n" +
+      "sid=" + ((.sessionId // "") | tostring | @sh) + "\n" +
+      "cwd=" + ((.cwd // "") | tostring | @sh) + "\n" +
+      "name=" + ((.name // "") | tostring | @sh) + "\n" +
+      "status=" + ((.status // "idle") | tostring | @sh)
+    ' "$file" 2>/dev/null)" || continue
+
+    if ! [[ ${pid:-} =~ ^[0-9]+$ ]]; then
+      pid=$($BASENAME "$file" .json)
+    fi
+    [[ $pid =~ ^[0-9]+$ ]] || continue
+    $KILL -0 "$pid" 2>/dev/null || continue
+
+    tty=$($PS -o tty= -p "$pid" 2>/dev/null | trim)
+    tty=$(normalize_tty "$tty")
+
+    case "${status:-idle}" in
+      busy|working) state=working ;;
+      *) state=idle ;;
+    esac
+
+    label_name=${name:-}
+    [ -n "$label_name" ] || label_name=${sid:-$pid}
+    label="claude · $label_name · $(short_cwd "${cwd:-}")"
+    emit_row "claude-$pid" "claude" "$state" "$tty" "${cwd:-}" "$label"
+  done
+}
+
+ROLLOUT_INDEX=
+
+build_rollout_index() {
+  [ -n "${ROLLOUT_INDEX:-}" ] && return 0
+  ROLLOUT_INDEX=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-rollouts.XXXXXX") || return 1
+  trap 'rm -f "$ROLLOUT_INDEX"' EXIT
+
+  local base="$HOME/.codex/sessions"
+  [ -d "$base" ] || return 0
+
+  $FIND "$base" -type f -name 'rollout-*.jsonl' -mtime -2 -exec $STAT -f '%m	%N' {} + 2>/dev/null | $SORT -rn > "$ROLLOUT_INDEX" || true
+}
+
+rollout_cwd() {
+  $HEAD -n 1 "$1" 2>/dev/null | $JQ -r '.payload.cwd // .cwd // empty' 2>/dev/null
+}
+
+newest_rollout_for_cwd() {
+  local wanted=$1 m file cwd
+  build_rollout_index || return 0
+  [ -n "${ROLLOUT_INDEX:-}" ] && [ -f "$ROLLOUT_INDEX" ] || return 0
+
+  while IFS=$'\t' read -r m file; do
+    [ -n "${file:-}" ] || continue
+    [ -f "$file" ] || continue
+    cwd=$(rollout_cwd "$file")
+    if [ "$cwd" = "$wanted" ]; then
+      echo "$file"
+      return 0
+    fi
+  done < "$ROLLOUT_INDEX"
+}
+
+last_codex_boundary() {
+  local file=$1 pattern line
+  pattern='"type"[[:space:]]*:[[:space:]]*"(task_started|task_complete|turn_aborted)"'
+  line=$($TAIL -c 262144 "$file" 2>/dev/null | $GREP -E "$pattern" | $TAIL -n 1 || true)
+  if [ -z "$line" ]; then
+    line=$($GREP -E "$pattern" "$file" 2>/dev/null | $TAIL -n 1 || true)
+  fi
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line" | $SED -E 's/.*"type"[[:space:]]*:[[:space:]]*"(task_started|task_complete|turn_aborted)".*/\1/'
+  fi
+}
+
+codex_cwd() {
+  $LSOF -a -p "$1" -d cwd -Fn 2>/dev/null | $SED -n 's/^n//p' | $HEAD -n 1
+}
+
+collect_codex() {
+  local pid args tty cwd rollout boundary state label
+  { $PGREP -x codex 2>/dev/null || true; } | while read -r pid; do
+    [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
+    args=$($PS -o args= -p "$pid" 2>/dev/null || true)
+    case "$args" in
+      *"codex app-server"*|*" app-server"*) continue ;;
+    esac
+
+    tty=$($PS -o tty= -p "$pid" 2>/dev/null | trim)
+    tty=$(normalize_tty "$tty")
+    cwd=$(codex_cwd "$pid")
+    rollout=
+    boundary=
+    state=idle
+
+    if [ -n "$cwd" ]; then
+      rollout=$(newest_rollout_for_cwd "$cwd")
+    fi
+    if [ -n "$rollout" ]; then
+      boundary=$(last_codex_boundary "$rollout")
+    fi
+    if [ "$boundary" = "task_started" ]; then
+      state=working
+    fi
+
+    label="codex · $pid · $(short_cwd "${cwd:-}")"
+    emit_row "codex-$pid" "codex" "$state" "$tty" "${cwd:-}" "$label"
+  done
+}
+
+pi_session_dir_for_cwd() {
+  local cwd=${1:-}
+  cwd=${cwd%/}
+  printf -- '-%s--' "${cwd//\//-}"
+}
+
+pi_session_id() {
+  $HEAD -n 1 "$1" 2>/dev/null | $SED -nE 's/.*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
+}
+
+newest_pi_session_for_cwd() {
+  local wanted=$1 dir
+  dir="$HOME/.pi/agent/sessions/$(pi_session_dir_for_cwd "$wanted")"
+  [ -d "$dir" ] || return 0
+  $LS -t "$dir"/*.jsonl 2>/dev/null | $HEAD -n 1
+}
+
+last_pi_state() {
+  local file=$1 line
+  line=$($TAIL -c 262144 "$file" 2>/dev/null | $AWK '/"type"[[:space:]]*:[[:space:]]*"message"/ { line = $0 } END { print line }')
+  if [ -z "$line" ]; then
+    line=$($AWK '/"type"[[:space:]]*:[[:space:]]*"message"/ { line = $0 } END { print line }' "$file" 2>/dev/null)
+  fi
+  if [ -z "$line" ]; then
+    echo idle
+    return 0
+  fi
+  if [[ "$line" == *'"role":"assistant"'* && "$line" != *'"stopReason":"toolUse"'* && "$line" != *'"type":"toolCall"'* && "$line" != *'"type":"tool_call"'* ]]; then
+    echo idle
+  else
+    echo working
+  fi
+}
+
+pi_cwd_from_listing() {
+  local pid=$1
+  $AWK -v target="p$pid" '
+    $0 == target { found = 1; next }
+    found && /^n/ { sub(/^n/, ""); print; exit }
+    /^p/ { found = 0 }
+  '
+}
+
+tty_from_listing() {
+  local pid=$1
+  $AWK -v pid="$pid" '$1 == pid { print $2; exit }'
+}
+
+pi_field_from_process_cache() {
+  local pid=$1 field=$2
+  $AWK -F '\t' -v pid="$pid" -v field="$field" '
+    $1 == pid {
+      if (field == "tty") print $2
+      if (field == "cwd") print $3
+      exit
+    }
+  '
+}
+
+
+collect_pi() {
+  local pid tty cwd session sid state label_name label cwd_listing tty_listing pids pid_csv meta_cache key cached process_cache process_cache_tmp process_listing cache_pids cache_mtime now
+  pids=$($PGREP -x pi 2>/dev/null || true)
+  [ -n "$pids" ] || return 0
+  pid_csv=$(printf '%s,' $pids)
+  pid_csv=${pid_csv%,}
+  process_cache="$HOME/.cache/agent-watch/pi-process.tsv"
+  $MKDIR -p "$HOME/.cache/agent-watch" 2>/dev/null || true
+  now=$($DATE +%s)
+
+  if [ -f "$process_cache" ]; then
+    cache_pids=$($HEAD -n 1 "$process_cache" | $SED 's/^# //')
+    cache_mtime=$($STAT -f '%m' "$process_cache" 2>/dev/null || echo 0)
+  else
+    cache_pids=
+    cache_mtime=0
+  fi
+
+  if [ "$cache_pids" != "$pid_csv" ] || [ $((now - cache_mtime)) -gt 5 ]; then
+    cwd_listing=$($LSOF -a -p "$pid_csv" -d cwd -Fp -Fn 2>/dev/null || true)
+    tty_listing=$($PS -o pid=,tty= -p "$pid_csv" 2>/dev/null || true)
+    process_cache_tmp=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-pi-process.XXXXXX") || return 1
+    $PRINTF '# %s\n' "$pid_csv" > "$process_cache_tmp"
+    while read -r pid; do
+      [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
+      tty=$(printf '%s\n' "$tty_listing" | tty_from_listing "$pid")
+      cwd=$(printf '%s\n' "$cwd_listing" | pi_cwd_from_listing "$pid")
+      $PRINTF '%s\t%s\t%s\n' "$pid" "$tty" "$cwd" >> "$process_cache_tmp"
+    done <<EOF_PI_CACHE_BUILD
+$pids
+EOF_PI_CACHE_BUILD
+    $MV "$process_cache_tmp" "$process_cache" 2>/dev/null || true
+  fi
+
+  process_listing=$($SED '1d' "$process_cache" 2>/dev/null || true)
+  meta_cache=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-pi-meta.XXXXXX") || return 1
+
+  while read -r pid; do
+    [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
+
+    tty=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" tty)
+    tty=$(normalize_tty "$tty")
+    cwd=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" cwd)
+    session=
+    sid=
+    state=idle
+
+    if [ -n "$cwd" ]; then
+      key=$(pi_session_dir_for_cwd "$cwd")
+      cached=$($AWK -F '\t' -v key="$key" '$1 == key { print; exit }' "$meta_cache")
+      if [ -n "$cached" ]; then
+        IFS=$'\t' read -r _ sid state <<EOF_PI_META_CACHE
+$cached
+EOF_PI_META_CACHE
+      else
+        session=$(newest_pi_session_for_cwd "$cwd")
+        if [ -n "$session" ]; then
+          sid=$(pi_session_id "$session")
+          state=$(last_pi_state "$session")
+          $PRINTF '%s\t%s\t%s\n' "$key" "$sid" "$state" >> "$meta_cache"
+        fi
+      fi
+    fi
+
+    label_name=${sid:-$pid}
+    if [ ${#label_name} -gt 8 ]; then
+      label_name=${label_name:0:8}
+    fi
+    label="pi · $label_name · $(short_cwd "${cwd:-}")"
+    emit_row "pi-$pid" "pi" "$state" "$tty" "${cwd:-}" "$label"
+  done <<EOF_PI_PIDS
+$pids
+EOF_PI_PIDS
+
+  rm -f "$meta_cache"
+}
+
+collect() {
+  collect_claude
+  collect_codex
+  collect_pi
+  return 0
+}
+
+cmd_list() {
+  local rows color reset saw id tool state tty cwd label display_state icon
+  reset=$'\033[0m'
+  rows=$(collect)
+  if [ -z "$rows" ]; then
+    echo "No agent sessions"
+    return 0
+  fi
+
+  $PRINTF '%-14s %-8s %-10s %-12s %s\n' ID TOOL STATE TTY LABEL
+  printf '%s\n' "$rows" | while IFS= read -r line; do
+    line=${line//$'\t'/$'\037'}
+    IFS=$'\037' read -r id tool state tty cwd label <<EOF_FIELDS
+$line
+EOF_FIELDS
+    case "$state" in
+      working) color=$'\033[32m'; display_state=working; icon=🟢 ;;
+      *) color=$'\033[33m'; display_state=IDLE; icon=🟡 ;;
+    esac
+    $PRINTF '%-14s %-8s %b%-10s%b %-12s %s %s\n' "$id" "$tool" "$color" "$display_state" "$reset" "${tty#/dev/}" "$icon" "$label"
+  done
+}
+
+cmd_json() {
+  collect | $JQ -R -s '''
+    split("\n")
+    | map(select(length > 0))
+    | map(split("\t") | {
+        id: .[0],
+        tool: .[1],
+        state: .[2],
+        tty: .[3],
+        cwd: .[4],
+        label: .[5]
+      })
+  '''
+}
+
+cmd_focus() {
+  local tty=${1:-}
+  if [ -z "$tty" ]; then
+    echo "usage: agent-watch focus <tty>" >&2
+    return 64
+  fi
+  tty=$(normalize_tty "$tty")
+  $OSASCRIPT - "$tty" <<'APPLESCRIPT'
+on run argv
+  set targetTTY to item 1 of argv
+  if targetTTY does not start with "/dev/" then set targetTTY to "/dev/" & targetTTY
+  tell application "iTerm2"
+    repeat with aWindow in windows
+      repeat with aTab in tabs of aWindow
+        repeat with aSession in sessions of aTab
+          if (tty of aSession) is targetTTY then
+            select aWindow
+            select aTab
+            select aSession
+            activate
+            return
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  error "No iTerm2 session for " & targetTTY
+end run
+APPLESCRIPT
+}
+
+case "${1:-list}" in
+  collect) collect ;;
+  list) cmd_list ;;
+  json) cmd_json ;;
+  focus) shift; cmd_focus "$@" ;;
+  *) echo "usage: agent-watch [list|json|focus <tty>]" >&2; exit 64 ;;
+esac
