@@ -70,7 +70,7 @@ private func statusIcon(total: Int, idle: Int, phase: TimeInterval) -> NSImage {
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: label.count > 1 ? 6.5 : 8.0, weight: .bold),
-            .foregroundColor: NSColor.black,
+            .foregroundColor: isActive ? NSColor.white : NSColor.black,
             .paragraphStyle: paragraph,
         ]
         let labelSize = label.size(withAttributes: attributes)
