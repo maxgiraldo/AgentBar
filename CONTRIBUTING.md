@@ -14,9 +14,8 @@ This builds and signs `AgentBar.app`, installs `agent-watch`, writes the LaunchA
 
 - `AgentBar.swift` — menu-bar UI, notifications, hotkey, app behavior
 - `agent-watch` — Claude/Codex/Pi session detection and terminal focus
-- `scripts/install.sh` — build/install/reload flow
+- `scripts/install.sh` — build/install/reload flow and LaunchAgent generation
 - `scripts/uninstall.sh` — cleanup flow
-- `com.max.agentbar.plist` — LaunchAgent source template
 
 ## Development loop
 
@@ -67,6 +66,7 @@ Also manually verify any affected UI behavior:
 ## Contribution rules
 
 - Do not commit generated app bundles, logs, caches, or local build artifacts.
+- Do not commit generated LaunchAgent plists; `scripts/install.sh` writes user-specific plist files at install time.
 - Do not shell out from menu rendering; the menu must render from cached state only.
 - Keep `agent-watch json` fast and valid JSON.
 - Preserve the documented Claude/Codex/Pi detection semantics unless the behavior change is explicit.
