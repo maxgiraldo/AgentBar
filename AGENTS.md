@@ -48,6 +48,8 @@ Only remove `/Applications/AgentBar.app` with `sudo rm -rf` after confirming it 
 
 After changing Swift or the engine, run `make build-only` first. If that succeeds, run `make install` to reload the live app.
 
+`agent-watch focus <tty>` supports iTerm2 by exact tty. Ghostty is best-effort by matching the agent session cwd to Ghostty's AppleScript `working directory`.
+
 ## Contribution checklist
 
 - Keep generated app bundles, logs, and caches out of git.

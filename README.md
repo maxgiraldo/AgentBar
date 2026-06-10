@@ -27,7 +27,7 @@ The installer:
 - macOS 13+ on Apple Silicon
 - Xcode Command Line Tools (`xcode-select --install`)
 - Homebrew `jq` (`brew install jq`)
-- iTerm2 for focus-by-tty
+- iTerm2 or Ghostty for focusing terminal sessions
 
 ## Usage
 
@@ -35,7 +35,7 @@ The installer:
 - Working sessions use a green spinning ring.
 - Idle sessions use a static filled yellow circle.
 - `Ctrl+Option+Command+A` cycles through sessions, idle sessions first.
-- Clicking a session focuses its iTerm2 tab.
+- Clicking a session focuses its iTerm2 or Ghostty tab/window.
 - Notifications are sent by the signed app bundle, not `terminal-notifier`.
 
 ## Screenshot
@@ -59,6 +59,8 @@ Direct engine commands:
 ~/.local/bin/agent-watch json | jq .
 ~/.local/bin/agent-watch focus /dev/ttys004
 ```
+
+Focus is exact for iTerm2 because iTerm2 exposes each session's tty. Ghostty does not expose tty in its AppleScript model, so AgentBar falls back to focusing the Ghostty terminal with the matching working directory.
 
 ## Overwriting or removing a legacy install
 

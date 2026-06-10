@@ -13,7 +13,7 @@ This builds and signs `AgentBar.app`, installs `agent-watch`, writes the LaunchA
 ## Where to change things
 
 - `AgentBar.swift` — menu-bar UI, notifications, hotkey, app behavior
-- `agent-watch` — Claude/Codex/Pi session detection and iTerm focus
+- `agent-watch` — Claude/Codex/Pi session detection and terminal focus
 - `scripts/install.sh` — build/install/reload flow
 - `scripts/uninstall.sh` — cleanup flow
 - `com.max.agentbar.plist` — LaunchAgent source template
@@ -58,7 +58,7 @@ git status --short
 Also manually verify any affected UI behavior:
 
 - menu opens instantly
-- session click focuses the correct iTerm2 tab
+- session click focuses the correct iTerm2 tab or Ghostty terminal
 - `Ctrl+Option+Command+A` cycles sessions
 - working sessions show the spinning indicator
 - idle sessions show the static filled indicator

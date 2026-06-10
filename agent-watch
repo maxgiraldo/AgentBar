@@ -379,13 +379,8 @@ cmd_json() {
   '''
 }
 
-cmd_focus() {
-  local tty=${1:-}
-  if [ -z "$tty" ]; then
-    echo "usage: agent-watch focus <tty>" >&2
-    return 64
-  fi
-  tty=$(normalize_tty "$tty")
+focus_iterm() {
+  local tty=$1
   $OSASCRIPT - "$tty" <<'APPLESCRIPT'
 on run argv
   set targetTTY to item 1 of argv
@@ -408,6 +403,64 @@ on run argv
   error "No iTerm2 session for " & targetTTY
 end run
 APPLESCRIPT
+}
+
+cwd_for_tty() {
+  local tty=$1
+  collect | $AWK -F '\t' -v tty="$tty" '$4 == tty { print $5; exit }'
+}
+
+focus_ghostty() {
+  local cwd=$1
+  [ -n "$cwd" ] || return 1
+  $OSASCRIPT - "$cwd" <<'APPLESCRIPT'
+on stripTrailingSlash(pathText)
+  if pathText is not "/" then
+    repeat while pathText ends with "/"
+      set pathText to text 1 thru -2 of pathText
+    end repeat
+  end if
+  return pathText
+end stripTrailingSlash
+
+on run argv
+  set targetCWD to my stripTrailingSlash(item 1 of argv)
+  if application "Ghostty" is not running then error "Ghostty is not running"
+  tell application "Ghostty"
+    repeat with aWindow in windows
+      repeat with aTab in tabs of aWindow
+        repeat with aTerminal in terminals of aTab
+          set terminalCWD to my stripTrailingSlash(working directory of aTerminal as text)
+          if terminalCWD is targetCWD then
+            focus aTerminal
+            activate
+            return
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  error "No Ghostty terminal for " & targetCWD
+end run
+APPLESCRIPT
+}
+
+cmd_focus() {
+  local tty=${1:-} cwd
+  if [ -z "$tty" ]; then
+    echo "usage: agent-watch focus <tty>" >&2
+    return 64
+  fi
+  tty=$(normalize_tty "$tty")
+  if focus_iterm "$tty" >/dev/null 2>&1; then
+    return 0
+  fi
+  cwd=$(cwd_for_tty "$tty")
+  if focus_ghostty "$cwd" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "No iTerm2 session for $tty or Ghostty terminal for ${cwd:-matching session}" >&2
+  return 1
 }
 
 case "${1:-list}" in
