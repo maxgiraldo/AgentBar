@@ -36,6 +36,7 @@ The installer:
 - Idle sessions use a static filled yellow circle.
 - `Ctrl+Option+Command+A` cycles through sessions, idle sessions first.
 - Clicking a session focuses its iTerm2 or Ghostty tab/window.
+- iTerm2 sessions include their tab/window title in the menu label when available.
 - Notifications are sent by the signed app bundle, not `terminal-notifier`.
 
 ## Screenshot

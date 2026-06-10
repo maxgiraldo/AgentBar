@@ -336,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if let lastCycledSessionID, !sorted.contains(where: { $0.id == lastCycledSessionID }) {
             self.lastCycledSessionID = nil
         }
+        updateOpenMenuLabels()
         updateStatusIcon()
 
         if seeded {
@@ -376,6 +377,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             guard let tty = item.representedObject as? String else { continue }
             guard let session = cached.first(where: { $0.tty == tty }) else { continue }
             item.image = sessionIcon(isIdle: session.isIdle, phase: phase)
+        }
+    }
+
+    private func updateOpenMenuLabels() {
+        for item in menu.items {
+            guard let tty = item.representedObject as? String else { continue }
+            guard let session = cached.first(where: { $0.tty == tty }) else { continue }
+            item.title = session.label
         }
     }
 
