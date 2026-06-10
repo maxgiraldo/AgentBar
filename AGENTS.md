@@ -23,6 +23,22 @@ make status
 
 The app bundle is installed to `/opt/homebrew/Applications/AgentBar.app` by default. Keep this path unless the user asks otherwise; local app paths were unreliable on this Mac.
 
+## Legacy install cleanup
+
+`./scripts/install.sh` overwrites `/opt/homebrew/Applications/AgentBar.app`, `~/.local/bin/agent-watch`, and `~/Library/LaunchAgents/com.max.agentbar.plist`.
+
+If an older install exists in another location, run:
+
+```bash
+./scripts/uninstall.sh
+pkill -x AgentBar 2>/dev/null || true
+rm -rf "$HOME/Applications/AgentBar.app"
+rm -f "$HOME/Library/LaunchAgents/agentbar.plist"
+./scripts/install.sh
+```
+
+Only remove `/Applications/AgentBar.app` with `sudo rm -rf` after confirming it is a legacy AgentBar copy.
+
 ## Editing
 
 - App source: `AgentBar.swift`

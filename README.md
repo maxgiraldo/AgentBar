@@ -52,6 +52,30 @@ Direct engine commands:
 ~/.local/bin/agent-watch focus /dev/ttys004
 ```
 
+## Overwriting or removing a legacy install
+
+Running `./scripts/install.sh` overwrites the supported install paths:
+
+- `/opt/homebrew/Applications/AgentBar.app`
+- `~/.local/bin/agent-watch`
+- `~/Library/LaunchAgents/com.max.agentbar.plist`
+
+If an older AgentBar was installed somewhere else, do a clean reinstall:
+
+```bash
+./scripts/uninstall.sh
+pkill -x AgentBar 2>/dev/null || true
+rm -rf "$HOME/Applications/AgentBar.app"
+rm -f "$HOME/Library/LaunchAgents/agentbar.plist"
+./scripts/install.sh
+```
+
+If you previously installed a global copy in `/Applications`, remove it only if you know it is the old AgentBar:
+
+```bash
+sudo rm -rf /Applications/AgentBar.app
+```
+
 ## Development / contributing
 
 For agents or humans making changes:

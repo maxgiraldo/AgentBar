@@ -30,6 +30,20 @@ make status
 
 Use `make build-only` first so compile/signing errors are caught before restarting the live LaunchAgent. Use `make install` only after the build and engine checks pass.
 
+## Legacy install cleanup
+
+The installer overwrites the supported app, engine, and LaunchAgent paths. If a tester has an older AgentBar from another path, clean it before validating your change:
+
+```bash
+./scripts/uninstall.sh
+pkill -x AgentBar 2>/dev/null || true
+rm -rf "$HOME/Applications/AgentBar.app"
+rm -f "$HOME/Library/LaunchAgents/agentbar.plist"
+./scripts/install.sh
+```
+
+Only remove `/Applications/AgentBar.app` with `sudo rm -rf` when you have confirmed it is a legacy AgentBar copy.
+
 ## Verification checklist
 
 Before pushing or opening a PR:
