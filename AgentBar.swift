@@ -8,7 +8,12 @@ private let finishedSoundName = "Blow"
 private let pollInterval: TimeInterval = 3.0
 private let hotKeySignature = OSType(0x41474252)
 private let hotKeyIdentifier = UInt32(1)
-private let statusIconSize = NSSize(width: 26, height: 18)
+private let statusIconHeight: CGFloat = 18.0
+private let statusIconRadius: CGFloat = 6.6
+private let statusIconHorizontalPadding: CGFloat = 4.0
+private var statusIconSize: NSSize {
+    NSSize(width: (statusIconRadius * 2.0 + statusIconHorizontalPadding * 2.0).rounded(.up), height: statusIconHeight)
+}
 private let statusAnimationInterval: TimeInterval = 1.0 / 18.0
 private let sessionIconSize = NSSize(width: 18, height: 18)
 
@@ -36,8 +41,8 @@ private func statusIcon(total: Int, idle: Int, phase: TimeInterval) -> NSImage {
     NSColor.clear.setFill()
     NSRect(origin: .zero, size: statusIconSize).fill()
 
-    let center = NSPoint(x: 13, y: 9)
-    let radius: CGFloat = 6.6
+    let center = NSPoint(x: image.size.width / 2.0, y: image.size.height / 2.0)
+    let radius = statusIconRadius
     let shownCount = idle > 0 ? idle : total
     let isActive = total > 0 && idle == 0
     let color: NSColor = isActive ? .systemGreen : (total > 0 ? .systemYellow : .tertiaryLabelColor)
@@ -151,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
 
         menu.delegate = self
-        statusItem.length = statusIconSize.width
+        statusItem.length = NSStatusItem.variableLength
         statusItem.menu = menu
         statusItem.button?.title = ""
         statusItem.button?.imagePosition = .imageOnly
