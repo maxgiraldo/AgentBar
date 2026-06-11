@@ -70,6 +70,74 @@ short_cwd() {
   fi
 }
 
+ITERM_TITLE_CACHE=
+ROLLOUT_INDEX=
+
+cleanup_temp_files() {
+  rm -f "${ROLLOUT_INDEX:-}" "${ITERM_TITLE_CACHE:-}"
+}
+trap cleanup_temp_files EXIT
+
+build_iterm_title_cache() {
+  [ -n "${ITERM_TITLE_CACHE:-}" ] && return 0
+  ITERM_TITLE_CACHE=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-iterm-titles.XXXXXX") || return 1
+
+  $OSASCRIPT <<'APPLESCRIPT' > "$ITERM_TITLE_CACHE" 2>/dev/null || true
+set outputLines to ""
+set tabDelimiter to ASCII character 9
+if application "iTerm2" is running then
+  tell application "iTerm2"
+    repeat with aWindow in windows
+      repeat with aTab in tabs of aWindow
+        set tabTitle to ""
+        try
+          set tabTitle to title of aTab as text
+        end try
+        set windowName to ""
+        try
+          set windowName to name of aWindow as text
+        end try
+        repeat with aSession in sessions of aTab
+          set sessionTTY to tty of aSession as text
+          set sessionName to name of aSession as text
+          set titleName to tabTitle
+          if titleName is "" and windowName is not "" then
+            set titleName to windowName
+          end if
+          if titleName is "" then
+            set titleName to sessionName
+          end if
+          if sessionTTY is not "" and titleName is not "" then
+            set outputLines to outputLines & sessionTTY & tabDelimiter & titleName & linefeed
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+end if
+return outputLines
+APPLESCRIPT
+}
+
+iterm_title_for_tty() {
+  local tty=$1 title
+  [ -n "$tty" ] || return 0
+  build_iterm_title_cache || return 0
+  [ -n "${ITERM_TITLE_CACHE:-}" ] && [ -f "$ITERM_TITLE_CACHE" ] || return 0
+  title=$($AWK -F '\t' -v tty="$tty" '$1 == tty { print $2; exit }' "$ITERM_TITLE_CACHE")
+  printf '%s' "$title"
+}
+
+session_label() {
+  local tool=$1 identity=$2 tty=$3 cwd=$4 title
+  title=$(iterm_title_for_tty "$tty")
+  if [ -n "$title" ]; then
+    echo "$title · $tool · $identity · $(short_cwd "${cwd:-}")"
+  else
+    echo "$tool · $identity · $(short_cwd "${cwd:-}")"
+  fi
+}
+
 emit_row() {
   local id=$1 tool=$2 state=$3 tty=$4 cwd=$5 label=$6
   id=$(printf '%s' "$id" | clean_field)
@@ -112,17 +180,14 @@ collect_claude() {
 
     label_name=${name:-}
     [ -n "$label_name" ] || label_name=${sid:-$pid}
-    label="claude · $label_name · $(short_cwd "${cwd:-}")"
+    label=$(session_label "claude" "$label_name" "$tty" "${cwd:-}")
     emit_row "claude-$pid" "claude" "$state" "$tty" "${cwd:-}" "$label"
   done
 }
 
-ROLLOUT_INDEX=
-
 build_rollout_index() {
   [ -n "${ROLLOUT_INDEX:-}" ] && return 0
   ROLLOUT_INDEX=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-rollouts.XXXXXX") || return 1
-  trap 'rm -f "$ROLLOUT_INDEX"' EXIT
 
   local base="$HOME/.codex/sessions"
   [ -d "$base" ] || return 0
@@ -192,7 +257,7 @@ collect_codex() {
       state=working
     fi
 
-    label="codex · $pid · $(short_cwd "${cwd:-}")"
+    label=$(session_label "codex" "$pid" "$tty" "${cwd:-}")
     emit_row "codex-$pid" "codex" "$state" "$tty" "${cwd:-}" "$label"
   done
 }
@@ -325,7 +390,7 @@ EOF_PI_META_CACHE
     if [ ${#label_name} -gt 8 ]; then
       label_name=${label_name:0:8}
     fi
-    label="pi · $label_name · $(short_cwd "${cwd:-}")"
+    label=$(session_label "pi" "$label_name" "$tty" "${cwd:-}")
     emit_row "pi-$pid" "pi" "$state" "$tty" "${cwd:-}" "$label"
   done <<EOF_PI_PIDS
 $pids
