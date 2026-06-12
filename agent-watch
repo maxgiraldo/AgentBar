@@ -279,6 +279,48 @@ newest_pi_session_for_cwd() {
   $LS -t "$dir"/*.jsonl 2>/dev/null | $HEAD -n 1
 }
 
+pi_session_started_at() {
+  local file=$1 timestamp
+  timestamp=$($HEAD -n 1 "$file" 2>/dev/null | $SED -nE 's/.*"timestamp"[[:space:]]*:[[:space:]]*"([^."]+).*/\1/p')
+  [ -n "$timestamp" ] || return 0
+  $DATE -ju -f '%Y-%m-%dT%H:%M:%S' "$timestamp" '+%s' 2>/dev/null
+}
+
+pi_process_started_at() {
+  local pid=$1 lstart
+  lstart=$($PS -o lstart= -p "$pid" 2>/dev/null | trim)
+  [ -n "$lstart" ] || return 0
+  $DATE -j -f '%a %b %e %T %Y' "$lstart" '+%s' 2>/dev/null
+}
+
+pi_session_for_process() {
+  local wanted=$1 started_at=$2 dir file file_started_at delta best_delta best_file
+  if [ -z "${started_at:-}" ]; then
+    newest_pi_session_for_cwd "$wanted"
+    return 0
+  fi
+
+  dir="$HOME/.pi/agent/sessions/$(pi_session_dir_for_cwd "$wanted")"
+  [ -d "$dir" ] || return 0
+  for file in "$dir"/*.jsonl; do
+    [ -e "$file" ] || continue
+    file_started_at=$(pi_session_started_at "$file")
+    [ -n "$file_started_at" ] || continue
+    delta=$((started_at - file_started_at))
+    [ "$delta" -ge 0 ] || delta=$((-delta))
+    if [ -z "${best_delta:-}" ] || [ "$delta" -lt "$best_delta" ]; then
+      best_delta=$delta
+      best_file=$file
+    fi
+  done
+
+  if [ -n "${best_file:-}" ]; then
+    printf '%s\n' "$best_file"
+  else
+    newest_pi_session_for_cwd "$wanted"
+  fi
+}
+
 last_pi_state() {
   local file=$1 line
   line=$($TAIL -c 262144 "$file" 2>/dev/null | $AWK '/"type"[[:space:]]*:[[:space:]]*"message"/ { line = $0 } END { print line }')
@@ -316,6 +358,7 @@ pi_field_from_process_cache() {
     $1 == pid {
       if (field == "tty") print $2
       if (field == "cwd") print $3
+      if (field == "started_at") print $4
       exit
     }
   '
@@ -323,11 +366,12 @@ pi_field_from_process_cache() {
 
 
 collect_pi() {
-  local pid tty cwd session sid state label_name label cwd_listing tty_listing pids pid_csv meta_cache key cached process_cache process_cache_tmp process_listing cache_pids cache_mtime now
+  local pid tty cwd started_at session sid state label_name label cwd_listing tty_listing pids pid_csv process_cache_key process_cache process_cache_tmp process_listing cache_pids cache_mtime now
   pids=$($PGREP -x pi 2>/dev/null || true)
   [ -n "$pids" ] || return 0
   pid_csv=$(printf '%s,' $pids)
   pid_csv=${pid_csv%,}
+  process_cache_key="v2 $pid_csv"
   process_cache="$HOME/.cache/agent-watch/pi-process.tsv"
   $MKDIR -p "$HOME/.cache/agent-watch" 2>/dev/null || true
   now=$($DATE +%s)
@@ -340,16 +384,17 @@ collect_pi() {
     cache_mtime=0
   fi
 
-  if [ "$cache_pids" != "$pid_csv" ] || [ $((now - cache_mtime)) -gt 5 ]; then
+  if [ "$cache_pids" != "$process_cache_key" ] || [ $((now - cache_mtime)) -gt 5 ]; then
     cwd_listing=$($LSOF -a -p "$pid_csv" -d cwd -Fp -Fn 2>/dev/null || true)
     tty_listing=$($PS -o pid=,tty= -p "$pid_csv" 2>/dev/null || true)
     process_cache_tmp=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-pi-process.XXXXXX") || return 1
-    $PRINTF '# %s\n' "$pid_csv" > "$process_cache_tmp"
+    $PRINTF '# %s\n' "$process_cache_key" > "$process_cache_tmp"
     while read -r pid; do
       [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
       tty=$(printf '%s\n' "$tty_listing" | tty_from_listing "$pid")
       cwd=$(printf '%s\n' "$cwd_listing" | pi_cwd_from_listing "$pid")
-      $PRINTF '%s\t%s\t%s\n' "$pid" "$tty" "$cwd" >> "$process_cache_tmp"
+      started_at=$(pi_process_started_at "$pid")
+      $PRINTF '%s\t%s\t%s\t%s\n' "$pid" "$tty" "$cwd" "$started_at" >> "$process_cache_tmp"
     done <<EOF_PI_CACHE_BUILD
 $pids
 EOF_PI_CACHE_BUILD
@@ -357,7 +402,6 @@ EOF_PI_CACHE_BUILD
   fi
 
   process_listing=$($SED '1d' "$process_cache" 2>/dev/null || true)
-  meta_cache=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/agent-watch-pi-meta.XXXXXX") || return 1
 
   while read -r pid; do
     [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
@@ -365,24 +409,16 @@ EOF_PI_CACHE_BUILD
     tty=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" tty)
     tty=$(normalize_tty "$tty")
     cwd=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" cwd)
+    started_at=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" started_at)
     session=
     sid=
     state=idle
 
     if [ -n "$cwd" ]; then
-      key=$(pi_session_dir_for_cwd "$cwd")
-      cached=$($AWK -F '\t' -v key="$key" '$1 == key { print; exit }' "$meta_cache")
-      if [ -n "$cached" ]; then
-        IFS=$'\t' read -r _ sid state <<EOF_PI_META_CACHE
-$cached
-EOF_PI_META_CACHE
-      else
-        session=$(newest_pi_session_for_cwd "$cwd")
-        if [ -n "$session" ]; then
-          sid=$(pi_session_id "$session")
-          state=$(last_pi_state "$session")
-          $PRINTF '%s\t%s\t%s\n' "$key" "$sid" "$state" >> "$meta_cache"
-        fi
+      session=$(pi_session_for_process "$cwd" "$started_at")
+      if [ -n "$session" ]; then
+        sid=$(pi_session_id "$session")
+        state=$(last_pi_state "$session")
       fi
     fi
 
@@ -395,8 +431,6 @@ EOF_PI_META_CACHE
   done <<EOF_PI_PIDS
 $pids
 EOF_PI_PIDS
-
-  rm -f "$meta_cache"
 }
 
 collect() {
