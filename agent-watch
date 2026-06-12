@@ -272,6 +272,10 @@ pi_session_id() {
   $HEAD -n 1 "$1" 2>/dev/null | $SED -nE 's/.*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
 }
 
+pi_session_name() {
+  $GREP '"type":"session_info"' "$1" 2>/dev/null | $TAIL -n 1 | $SED -nE 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
+}
+
 newest_pi_session_for_cwd() {
   local wanted=$1 dir
   dir="$HOME/.pi/agent/sessions/$(pi_session_dir_for_cwd "$wanted")"
@@ -293,8 +297,36 @@ pi_process_started_at() {
   $DATE -j -f '%a %b %e %T %Y' "$lstart" '+%s' 2>/dev/null
 }
 
+pi_session_for_title() {
+  local wanted=$1 title=$2 dir file name mtime best_mtime best_file
+  [ -n "${title:-}" ] || return 0
+  dir="$HOME/.pi/agent/sessions/$(pi_session_dir_for_cwd "$wanted")"
+  [ -d "$dir" ] || return 0
+
+  for file in "$dir"/*.jsonl; do
+    [ -e "$file" ] || continue
+    name=$(pi_session_name "$file")
+    [ -n "$name" ] || continue
+    if printf '%s\n' "$title" | $GREP -F "$name" >/dev/null 2>&1; then
+      mtime=$($STAT -f '%m' "$file" 2>/dev/null || echo 0)
+      if [ -z "${best_mtime:-}" ] || [ "$mtime" -gt "$best_mtime" ]; then
+        best_mtime=$mtime
+        best_file=$file
+      fi
+    fi
+  done
+
+  [ -n "${best_file:-}" ] && printf '%s\n' "$best_file"
+}
+
 pi_session_for_process() {
-  local wanted=$1 started_at=$2 dir file file_started_at delta best_delta best_file
+  local wanted=$1 started_at=$2 title=${3:-} dir file file_started_at delta best_delta best_file
+  best_file=$(pi_session_for_title "$wanted" "$title")
+  if [ -n "$best_file" ]; then
+    printf '%s\n' "$best_file"
+    return 0
+  fi
+
   if [ -z "${started_at:-}" ]; then
     newest_pi_session_for_cwd "$wanted"
     return 0
@@ -331,6 +363,10 @@ last_pi_state() {
     echo idle
     return 0
   fi
+  if [[ "$line" == *'"role":"user"'* && "$line" == *'🔔 Loop #'* ]]; then
+    echo idle
+    return 0
+  fi
   if [[ "$line" == *'"role":"assistant"'* && "$line" != *'"stopReason":"toolUse"'* && "$line" != *'"type":"toolCall"'* && "$line" != *'"type":"tool_call"'* ]]; then
     echo idle
   else
@@ -352,6 +388,13 @@ tty_from_listing() {
   $AWK -v pid="$pid" '$1 == pid { print $2; exit }'
 }
 
+pi_pids() {
+  {
+    $PGREP -x pi 2>/dev/null || true
+    $PS axww -o pid=,comm=,args= 2>/dev/null | $AWK '$2 == "pi" && ($3 == "pi" || $3 ~ "/pi$") { print $1 }'
+  } | $SORT -n | $AWK '!seen[$0]++'
+}
+
 pi_field_from_process_cache() {
   local pid=$1 field=$2
   $AWK -F '\t' -v pid="$pid" -v field="$field" '
@@ -366,8 +409,8 @@ pi_field_from_process_cache() {
 
 
 collect_pi() {
-  local pid tty cwd started_at session sid state label_name label cwd_listing tty_listing pids pid_csv process_cache_key process_cache process_cache_tmp process_listing cache_pids cache_mtime now
-  pids=$($PGREP -x pi 2>/dev/null || true)
+  local pid tty cwd started_at title session sid state label_name label cwd_listing tty_listing pids pid_csv process_cache_key process_cache process_cache_tmp process_listing cache_pids cache_mtime now
+  pids=$(pi_pids)
   [ -n "$pids" ] || return 0
   pid_csv=$(printf '%s,' $pids)
   pid_csv=${pid_csv%,}
@@ -410,12 +453,13 @@ EOF_PI_CACHE_BUILD
     tty=$(normalize_tty "$tty")
     cwd=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" cwd)
     started_at=$(printf '%s\n' "$process_listing" | pi_field_from_process_cache "$pid" started_at)
+    title=$(iterm_title_for_tty "$tty")
     session=
     sid=
     state=idle
 
     if [ -n "$cwd" ]; then
-      session=$(pi_session_for_process "$cwd" "$started_at")
+      session=$(pi_session_for_process "$cwd" "$started_at" "$title")
       if [ -n "$session" ]; then
         sid=$(pi_session_id "$session")
         state=$(last_pi_state "$session")
