@@ -298,13 +298,11 @@ pi_process_started_at() {
 }
 
 pi_session_for_title() {
-  local wanted=$1 title=$2 dir file name mtime best_mtime best_file
+  local _wanted=$1 title=$2 file name mtime best_mtime best_file
   [ -n "${title:-}" ] || return 0
-  dir="$HOME/.pi/agent/sessions/$(pi_session_dir_for_cwd "$wanted")"
-  [ -d "$dir" ] || return 0
 
-  for file in "$dir"/*.jsonl; do
-    [ -e "$file" ] || continue
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
     name=$(pi_session_name "$file")
     [ -n "$name" ] || continue
     if printf '%s\n' "$title" | $GREP -F "$name" >/dev/null 2>&1; then
@@ -314,7 +312,9 @@ pi_session_for_title() {
         best_file=$file
       fi
     fi
-  done
+  done <<EOF_PI_TITLE_FILES
+$($FIND "$HOME/.pi/agent/sessions" -type f -name '*.jsonl' -mtime -2 2>/dev/null)
+EOF_PI_TITLE_FILES
 
   [ -n "${best_file:-}" ] && printf '%s\n' "$best_file"
 }
