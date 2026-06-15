@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let workQueue = DispatchQueue(label: "com.max.agentbar.work", qos: .utility)
+    private let focusQueue = DispatchQueue(label: "com.max.agentbar.focus", qos: .userInitiated)
     private var timer: DispatchSourceTimer?
     private var animationTimer: Timer?
     private var cached: [AgentSession] = []
@@ -412,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     private func focus(_ tty: String) {
-        workQueue.async {
+        focusQueue.async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: agentWatchPath)
             process.arguments = ["focus", tty]
