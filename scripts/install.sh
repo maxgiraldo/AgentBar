@@ -153,13 +153,9 @@ if [ "$NO_LAUNCH" -eq 1 ]; then
 fi
 
 UID_NUM=$(id -u)
-if launchctl print "gui/$UID_NUM/$BUNDLE_ID" >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$UID_NUM/$BUNDLE_ID"
-else
-  launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENT" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID_NUM" "$LAUNCH_AGENT"
-  launchctl kickstart -k "gui/$UID_NUM/$BUNDLE_ID"
-fi
+launchctl bootout "gui/$UID_NUM" "$LAUNCH_AGENT" 2>/dev/null || true
+launchctl bootstrap "gui/$UID_NUM" "$LAUNCH_AGENT"
+launchctl kickstart -k "gui/$UID_NUM/$BUNDLE_ID"
 sleep 1
 
 launchctl print "gui/$UID_NUM/$BUNDLE_ID" | grep -E '^\s*(state|pid|runs|last exit) =' || true
