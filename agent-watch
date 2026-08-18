@@ -493,10 +493,66 @@ $pids
 EOF_PI_PIDS
 }
 
+omp_session_id() {
+  local name=${1:-}
+  name=$($BASENAME "$name" .jsonl)
+  name=${name##*_}
+  echo "${name:0:8}"
+}
+
+omp_state() {
+  local file=$1 line role stop
+  [ -f "$file" ] || { echo idle; return 0; }
+  line=$($TAIL -c 262144 "$file" 2>/dev/null | $GREP -F '"type":"message"' | $TAIL -n 1)
+  if [ -z "$line" ]; then
+    echo idle
+    return 0
+  fi
+  IFS=$'\t' read -r role stop <<EOF_OMP_STATE
+$(printf '%s' "$line" | $JQ -r '[(.message.role // ""), (.message.stopReason // "")] | @tsv' 2>/dev/null)
+EOF_OMP_STATE
+  if [ "$role" = assistant ] && [ -n "${stop:-}" ] && [ "$stop" != toolUse ]; then
+    echo idle
+  else
+    echo working
+  fi
+}
+
+collect_omp() {
+  local listing pid tty crumb cwd session sid state label
+  listing=$($PS -axo pid=,tty=,command= 2>/dev/null | $AWK '$3 == "omp" { print $1, $2 }')
+  [ -n "$listing" ] || return 0
+
+  while read -r pid tty; do
+    [[ ${pid:-} =~ ^[0-9]+$ ]] || continue
+
+    crumb="$HOME/.omp/agent/terminal-sessions/${tty##*/}"
+    tty=$(normalize_tty "$tty")
+    cwd=
+    session=
+    if [ -f "$crumb" ]; then
+      { IFS= read -r cwd; IFS= read -r session; } < "$crumb"
+    fi
+
+    state=idle
+    sid=$pid
+    if [ -n "${session:-}" ]; then
+      state=$(omp_state "$session")
+      sid=$(omp_session_id "$session")
+    fi
+
+    label=$(session_label "omp" "$sid" "$tty" "${cwd:-}")
+    emit_row "omp-$pid" "omp" "$state" "$tty" "${cwd:-}" "$label"
+  done <<EOF_OMP_PIDS
+$listing
+EOF_OMP_PIDS
+}
+
 collect() {
   collect_claude
   collect_codex
   collect_pi
+  collect_omp
   return 0
 }
 

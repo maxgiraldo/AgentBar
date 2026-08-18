@@ -4,7 +4,7 @@
 
 # AgentBar
 
-macOS menu-bar watcher for Claude Code, Codex CLI, and Pi sessions. It shows which agents are working or waiting, plays a sound when an agent becomes idle, posts a notification, and can jump iTerm2 to the matching tab.
+macOS menu-bar watcher for Claude Code, Codex CLI, Pi, and omp (Oh My Pi) sessions. It shows which agents are working or waiting, plays a sound when an agent becomes idle, posts a notification, and can jump iTerm2 to the matching tab.
 
 ## One-command setup
 
@@ -62,6 +62,8 @@ Direct engine commands:
 ```
 
 Focus is exact for iTerm2 because iTerm2 exposes each session's tty. Ghostty does not expose tty in its AppleScript model, so AgentBar falls back to focusing the Ghostty terminal with the matching working directory.
+
+omp sessions are detected from live `omp` processes; each session's cwd and transcript come from the terminal breadcrumb omp writes to `~/.omp/agent/terminal-sessions/<tty>`, and working/idle state comes from the last message record in that transcript.
 
 ## Overwriting or removing a legacy install
 
